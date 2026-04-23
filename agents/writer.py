@@ -1,0 +1,167 @@
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import inch
+from reportlab.lib.colors import HexColor
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable, Table, TableStyle
+from reportlab.lib import colors
+from datetime import datetime
+import os
+
+
+def writer_agent(state: dict) -> dict:
+    """
+    Agent 3: Writer
+    - Takes the analysis from Agent 2
+    - Formats it into a professional PDF report
+    - Saves the PDF to the outputs folder
+    - Updates and returns the shared state
+    """
+
+    print("\n[Writer] Starting PDF generation...")
+
+    analysis = state.get("analysis", "")
+    query = state.get("query", "")
+    selected_sources = state.get("selected_sources", [])
+
+    if not analysis:
+        print("[Writer] No analysis found in state.")
+        state["pdf_path"] = None
+        return state
+
+    # Create outputs folder if it doesn't exist
+    os.makedirs("outputs", exist_ok=True)
+
+    # Generate a timestamped filename
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"outputs/report_{timestamp}.pdf"
+
+    # Define colors
+    primary_color = HexColor("#1a1a2e")
+    accent_color = HexColor("#e94560")
+    light_gray = HexColor("#f5f5f5")
+    dark_gray = HexColor("#333333")
+
+    # Setup document
+    doc = SimpleDocTemplate(
+        filename,
+        pagesize=A4,
+        rightMargin=0.75 * inch,
+        leftMargin=0.75 * inch,
+        topMargin=1 * inch,
+        bottomMargin=0.75 * inch
+    )
+
+    # Define styles
+    styles = getSampleStyleSheet()
+
+    title_style = ParagraphStyle(
+        "CustomTitle",
+        parent=styles["Title"],
+        fontSize=24,
+        textColor=primary_color,
+        spaceAfter=6,
+        fontName="Helvetica-Bold"
+    )
+
+    subtitle_style = ParagraphStyle(
+        "CustomSubtitle",
+        parent=styles["Normal"],
+        fontSize=11,
+        textColor=accent_color,
+        spaceAfter=4,
+        fontName="Helvetica"
+    )
+
+    section_heading_style = ParagraphStyle(
+        "SectionHeading",
+        parent=styles["Heading1"],
+        fontSize=14,
+        textColor=primary_color,
+        spaceBefore=16,
+        spaceAfter=6,
+        fontName="Helvetica-Bold"
+    )
+
+    body_style = ParagraphStyle(
+        "CustomBody",
+        parent=styles["Normal"],
+        fontSize=10,
+        textColor=dark_gray,
+        spaceAfter=6,
+        leading=16,
+        fontName="Helvetica"
+    )
+
+    citation_style = ParagraphStyle(
+        "Citation",
+        parent=styles["Normal"],
+        fontSize=8,
+        textColor=HexColor("#666666"),
+        spaceAfter=4,
+        leading=12,
+        fontName="Helvetica"
+    )
+
+    # Start building the document content
+    content = []
+
+    # Title section
+    content.append(Spacer(1, 0.2 * inch))
+    content.append(Paragraph("Autonomous Market & Tech Analysis", subtitle_style))
+    content.append(Paragraph(query, title_style))
+    content.append(Spacer(1, 0.1 * inch))
+
+    # Date and metadata
+    date_str = datetime.now().strftime("%B %d, %Y at %I:%M %p")
+    content.append(Paragraph(f"Generated on {date_str}", citation_style))
+    content.append(Spacer(1, 0.1 * inch))
+    content.append(HRFlowable(width="100%", thickness=2, color=accent_color))
+    content.append(Spacer(1, 0.2 * inch))
+
+    # Process the analysis text into sections
+    lines = analysis.split("\n")
+    for line in lines:
+        line = line.strip()
+        if not line:
+            content.append(Spacer(1, 0.05 * inch))
+            continue
+
+        # Detect section headings by numbering or all caps patterns
+        if (line[0].isdigit() and ". " in line[:5]) or line.isupper():
+            content.append(Paragraph(line, section_heading_style))
+            content.append(HRFlowable(width="100%", thickness=0.5, color=light_gray))
+        elif line.startswith("-") or line.startswith("•"):
+            bullet_text = "• " + line.lstrip("-•").strip()
+            content.append(Paragraph(bullet_text, body_style))
+        else:
+            content.append(Paragraph(line, body_style))
+
+    # Citations section
+    if selected_sources:
+        content.append(Spacer(1, 0.3 * inch))
+        content.append(HRFlowable(width="100%", thickness=2, color=accent_color))
+        content.append(Spacer(1, 0.1 * inch))
+        content.append(Paragraph("Sources & Citations", section_heading_style))
+
+        for i, source in enumerate(selected_sources):
+            title = source.get("title", "Unknown Source")
+            url = source.get("url", "")
+            citation_text = f"[{i+1}] {title} — {url}"
+            content.append(Paragraph(citation_text, citation_style))
+            content.append(Spacer(1, 0.05 * inch))
+
+    # Footer note
+    content.append(Spacer(1, 0.3 * inch))
+    content.append(HRFlowable(width="100%", thickness=0.5, color=light_gray))
+    content.append(Spacer(1, 0.1 * inch))
+    content.append(Paragraph(
+        "This report was autonomously generated by the Market & Tech Analyst Agent system.",
+        citation_style
+    ))
+
+    # Build PDF
+    doc.build(content)
+
+    print(f"[Writer] PDF report saved to: {filename}")
+    state["pdf_path"] = filename
+    return state
