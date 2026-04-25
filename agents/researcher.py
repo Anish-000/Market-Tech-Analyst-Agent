@@ -4,6 +4,7 @@ from memory.chroma_store import save_research, retrieve_similar_research
 from langchain_groq import ChatGroq
 from dotenv import load_dotenv
 import os
+import json
 
 load_dotenv()
 
@@ -14,65 +15,69 @@ llm = ChatGroq(
 )
 
 
-def extract_subjects(query: str) -> tuple:
+def extract_subjects(query: str) -> list:
     """
-    Uses LLM to intelligently split the query into two subjects.
-    e.g. "compare lays vs kurkure" -> ("Lays", "Kurkure")
-    e.g. "iphone 14 pro vs samsung galaxy s23" -> ("iPhone 14 Pro", "Samsung Galaxy S23")
+    Uses LLM to extract any number of subjects from the query.
+    Returns a list of subject names.
+    e.g. "compare lays, kurkure and haldirams" -> ["Lays", "Kurkure", "Haldirams"]
+    e.g. "best budget phone" -> ["Budget Smartphones"]
     """
     print(f"[Researcher] Extracting subjects from query: '{query}'")
 
     prompt = f"""
-You are a query parser. The user wants to compare two things.
-Extract exactly two subjects from this query and return them as:
-SUBJECT_A: <first subject>
-SUBJECT_B: <second subject>
+You are a query parser. Extract all subjects the user wants to research or compare from this query.
+Return ONLY a valid JSON array of strings. Nothing else. No explanation. No markdown.
 
-Only return those two lines, nothing else.
+Examples:
+"compare lays vs kurkure" -> ["Lays", "Kurkure"]
+"nvidia rtx 5090 vs amd rx 9070 vs rtx 4090" -> ["Nvidia RTX 5090", "AMD RX 9070", "Nvidia RTX 4090"]
+"best budget smartphones" -> ["Budget Smartphones"]
+"compare messi, ronaldo and mbappe" -> ["Lionel Messi", "Cristiano Ronaldo", "Kylian Mbappe"]
 
 Query: "{query}"
 """
     response = llm.invoke(prompt)
-    lines = response.content.strip().split("\n")
+    raw = response.content.strip()
 
-    subject_a = ""
-    subject_b = ""
+    # Clean any accidental markdown
+    raw = raw.replace("```json", "").replace("```", "").strip()
 
-    for line in lines:
-        if line.startswith("SUBJECT_A:"):
-            subject_a = line.replace("SUBJECT_A:", "").strip()
-        elif line.startswith("SUBJECT_B:"):
-            subject_b = line.replace("SUBJECT_B:", "").strip()
+    try:
+        subjects = json.loads(raw)
+        if isinstance(subjects, list) and len(subjects) > 0:
+            print(f"[Researcher] Extracted {len(subjects)} subjects: {subjects}")
+            return subjects
+    except Exception:
+        pass
 
-    # Fallback: split by common separators if LLM fails
-    if not subject_a or not subject_b:
-        for separator in [" vs ", " versus ", " and ", " or ", " compared to "]:
-            if separator in query.lower():
-                parts = query.lower().split(separator)
-                subject_a = parts[0].strip().title()
-                subject_b = parts[1].strip().title()
-                break
+    # Fallback: split by common separators
+    print("[Researcher] LLM parse failed, using fallback splitter.")
+    for separator in [" vs ", " versus ", " and ", " or ", ", "]:
+        if separator in query.lower():
+            parts = query.lower().split(separator)
+            subjects = [p.strip().title() for p in parts if p.strip()]
+            print(f"[Researcher] Fallback subjects: {subjects}")
+            return subjects
 
-    print(f"[Researcher] Subject A: '{subject_a}' | Subject B: '{subject_b}'")
-    return subject_a, subject_b
+    # Last resort: treat entire query as one subject
+    return [query.strip().title()]
 
 
 def researcher_agent(state: dict) -> dict:
     """
     Agent 1: Researcher
-    - Extracts two subjects from the query
-    - Searches each subject individually
+    - Extracts n subjects from the query dynamically
+    - Searches each subject independently
     - Checks memory for past research
-    - Presents all sources for human selection
+    - Prepares sources grouped by subject for human selection
     """
 
     query = state["query"]
     print(f"\n[Researcher] Starting research for: '{query}'")
 
-    # Step 1: Extract two subjects from the query
-    subject_a, subject_b = extract_subjects(query)
-    state["subject_a"] = subject_a
-    state["subject_b"] = subject_b
+    # Step 1: Extract all subjects dynamically
+    subjects = extract_subjects(query)
+    state["subjects"] = subjects
 
     # Step 2: Check memory for past research
     past_research = retrieve_similar_research(query, n_results=3)
@@ -81,29 +86,29 @@ def researcher_agent(state: dict) -> dict:
     else:
         print("[Researcher] No past research found. Starting fresh.")
 
-    # Step 3: Search each subject individually
-    print(f"[Researcher] Searching for '{subject_a}' independently...")
-    search_results_a = search_web(f"{subject_a} review price features analysis", max_results=5)
+    # Step 3: Search each subject independently
+    search_results_per_subject = {}
+    all_results = []
 
-    print(f"[Researcher] Searching for '{subject_b}' independently...")
-    search_results_b = search_web(f"{subject_b} review price features analysis", max_results=5)
+    for subject in subjects:
+        print(f"[Researcher] Searching independently for: '{subject}'...")
+        results = search_web(
+            f"{subject} review price features analysis",
+            max_results=5
+        )
+        # Tag each result with its subject
+        for r in results:
+            r["subject"] = subject
+        search_results_per_subject[subject] = results
+        all_results.extend(results)
 
-    # Step 4: Combine all results for the human selection screen
-    # Tag each result so we know which subject it belongs to
-    for r in search_results_a:
-        r["subject"] = subject_a
-    for r in search_results_b:
-        r["subject"] = subject_b
-
-    all_results = search_results_a + search_results_b
-
-    state["search_results_a"] = search_results_a
-    state["search_results_b"] = search_results_b
+    state["search_results_per_subject"] = search_results_per_subject
     state["search_results"] = all_results
     state["past_research"] = past_research
     state["awaiting_source_selection"] = True
 
-    print(f"\n[Researcher] Found {len(search_results_a)} sources for '{subject_a}' and {len(search_results_b)} for '{subject_b}'.")
+    total = len(all_results)
+    print(f"\n[Researcher] Total sources found: {total} across {len(subjects)} subjects.")
     print("[Researcher] Waiting for user source selection.")
     return state
 
@@ -111,54 +116,56 @@ def researcher_agent(state: dict) -> dict:
 def researcher_agent_after_selection(state: dict) -> dict:
     """
     Runs after user selects sources.
-    Scrapes selected URLs separately for each subject.
+    Scrapes selected URLs grouped by subject.
+    Saves everything to memory.
     """
 
     query = state["query"]
-    subject_a = state["subject_a"]
-    subject_b = state["subject_b"]
+    subjects = state["subjects"]
     selected_indices = state.get("selected_indices", [])
     all_results = state.get("search_results", [])
 
     # Get selected sources
-    selected_sources = [all_results[i] for i in selected_indices if i < len(all_results)]
+    selected_sources = [
+        all_results[i] for i in selected_indices if i < len(all_results)
+    ]
 
-    # Split selected sources back into their subjects
-    sources_a = [s for s in selected_sources if s.get("subject") == subject_a]
-    sources_b = [s for s in selected_sources if s.get("subject") == subject_b]
+    # Group selected sources by subject
+    raw_research_per_subject = {}
+    combined_research = ""
 
-    print(f"\n[Researcher] Scraping {len(sources_a)} sources for '{subject_a}'...")
-    scraped_a = scrape_multiple([s["url"] for s in sources_a])
+    for subject in subjects:
+        subject_sources = [s for s in selected_sources if s.get("subject") == subject]
+        urls = [s["url"] for s in subject_sources]
 
-    print(f"[Researcher] Scraping {len(sources_b)} sources for '{subject_b}'...")
-    scraped_b = scrape_multiple([s["url"] for s in sources_b])
+        if urls:
+            print(f"[Researcher] Scraping {len(urls)} sources for '{subject}'...")
+            scraped = scrape_multiple(urls)
+        else:
+            print(f"[Researcher] No sources selected for '{subject}', skipping scrape.")
+            scraped = []
 
-    # Build separate research blocks
-    raw_research_a = f"=== DATA FOR: {subject_a} ===\n"
-    for item in scraped_a:
-        raw_research_a += f"\nSource: {item['url']}\n{item['content']}\n"
+        subject_text = f"=== INDEPENDENT DATA FOR: {subject} ===\n"
+        for item in scraped:
+            subject_text += f"\nSource: {item['url']}\n{item['content']}\n"
 
-    raw_research_b = f"=== DATA FOR: {subject_b} ===\n"
-    for item in scraped_b:
-        raw_research_b += f"\nSource: {item['url']}\n{item['content']}\n"
+        raw_research_per_subject[subject] = subject_text
+        combined_research += subject_text + "\n"
 
-    # Include past research as context
+    # Include past research as additional context
     past_research = state.get("past_research", [])
-    past_context = ""
     if past_research:
-        past_context = "\n--- Past Research from Memory ---\n"
+        combined_research += "\n--- Past Research from Memory ---\n"
         for entry in past_research:
-            past_context += f"\n{entry['content']}\n"
+            combined_research += f"\n{entry['content']}\n"
 
     # Save to memory
-    combined = raw_research_a + "\n" + raw_research_b + past_context
-    save_research(topic=query, content=combined)
+    save_research(topic=query, content=combined_research)
 
-    state["raw_research_a"] = raw_research_a
-    state["raw_research_b"] = raw_research_b
-    state["raw_research"] = combined
+    state["raw_research_per_subject"] = raw_research_per_subject
+    state["raw_research"] = combined_research
     state["selected_sources"] = selected_sources
     state["awaiting_source_selection"] = False
 
-    print("[Researcher] Research complete. Passing to Analyst.")
+    print("[Researcher] All subjects scraped. Passing to Analyst.")
     return state

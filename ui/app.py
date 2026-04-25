@@ -457,73 +457,64 @@ with left_col:
     elif st.session_state.stage == "source_selection":
         search_results = st.session_state.pipeline_state.get("search_results", [])
         past_research = st.session_state.pipeline_state.get("past_research", [])
-        subject_a = st.session_state.pipeline_state.get("subject_a", "Subject A")
-        subject_b = st.session_state.pipeline_state.get("subject_b", "Subject B")
+        subjects = st.session_state.pipeline_state.get("subjects", [])
+
+        # Colors for each subject label
+        subject_colors = [
+            "#7c6ee0", "#e0943a", "#2a9d6e",
+            "#e06e7c", "#4ac0e0", "#c0e04a"
+        ]
 
         st.markdown('<div class="section-label">Human-in-the-Loop · Source Selection</div>', unsafe_allow_html=True)
+
+        subjects_display = ", ".join(f"<strong style='color:#c4b8f5'>{s}</strong>" for s in subjects)
         st.markdown(f"""
-            <div style="font-family: 'DM Sans', sans-serif; font-size: 0.92rem; color: #8a8699; margin-bottom: 1.2rem; line-height: 1.6;">
-                The Researcher Agent collected independent data for <strong style="color:#c4b8f5">{subject_a}</strong> and <strong style="color:#c4b8f5">{subject_b}</strong> separately.
-                Select sources from each to focus the analysis on.
+            <div style="font-family: 'DM Sans', sans-serif; font-size: 0.92rem;
+            color: #8a8699; margin-bottom: 1.2rem; line-height: 1.6;">
+                The Researcher Agent independently collected data for {subjects_display}.
+                Select the sources you want the Analyst to use.
             </div>
         """, unsafe_allow_html=True)
 
         if past_research:
-            st.markdown(f'<div class="info-banner">◈ Memory — {len(past_research)} past research entries found for this topic. They will be included automatically.</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="info-banner">◈ Memory — {len(past_research)} past research entries found. They will be included automatically.</div>', unsafe_allow_html=True)
 
         selected = []
 
-        # Subject A sources
-        st.markdown(f"""
-            <div style="font-family: 'Syne', sans-serif; font-size: 1rem; font-weight: 700;
-            color: #7c6ee0; margin: 1.2rem 0 0.6rem; padding-left: 0.75rem;
-            border-left: 3px solid #7c6ee0;">
-                Sources for {subject_a}
-            </div>
-        """, unsafe_allow_html=True)
+        for s_index, subject in enumerate(subjects):
+            color = subject_colors[s_index % len(subject_colors)]
 
-        for i, source in enumerate(search_results):
-            if source.get("subject") != subject_a:
+            st.markdown(f"""
+                <div style="font-family: 'Syne', sans-serif; font-size: 1rem;
+                font-weight: 700; color: {color}; margin: 1.4rem 0 0.6rem;
+                padding-left: 0.75rem; border-left: 3px solid {color};">
+                    Sources for {subject}
+                </div>
+            """, unsafe_allow_html=True)
+
+            subject_results = [
+                (i, r) for i, r in enumerate(search_results)
+                if r.get("subject") == subject
+            ]
+
+            if not subject_results:
+                st.markdown(f'<div style="color:#3d3a50; font-size:0.8rem; padding-left:1rem;">No sources found for {subject}.</div>', unsafe_allow_html=True)
                 continue
-            col1, col2 = st.columns([0.04, 0.96])
-            with col1:
-                checked = st.checkbox("", key=f"source_{i}", label_visibility="collapsed")
-            with col2:
-                st.markdown(f"""
-                    <div class="source-card">
-                        <div class="source-title">{source['title']}</div>
-                        <div class="source-url">{source['url']}</div>
-                        <div class="source-preview">{source['content'][:130]}...</div>
-                    </div>
-                """, unsafe_allow_html=True)
-            if checked:
-                selected.append(i)
 
-        # Subject B sources
-        st.markdown(f"""
-            <div style="font-family: 'Syne', sans-serif; font-size: 1rem; font-weight: 700;
-            color: #e0943a; margin: 1.2rem 0 0.6rem; padding-left: 0.75rem;
-            border-left: 3px solid #e0943a;">
-                Sources for {subject_b}
-            </div>
-        """, unsafe_allow_html=True)
-
-        for i, source in enumerate(search_results):
-            if source.get("subject") != subject_b:
-                continue
-            col1, col2 = st.columns([0.04, 0.96])
-            with col1:
-                checked = st.checkbox("", key=f"source_{i}", label_visibility="collapsed")
-            with col2:
-                st.markdown(f"""
-                    <div class="source-card">
-                        <div class="source-title">{source['title']}</div>
-                        <div class="source-url">{source['url']}</div>
-                        <div class="source-preview">{source['content'][:130]}...</div>
-                    </div>
-                """, unsafe_allow_html=True)
-            if checked:
-                selected.append(i)
+            for i, source in subject_results:
+                col1, col2 = st.columns([0.04, 0.96])
+                with col1:
+                    checked = st.checkbox("", key=f"source_{i}", label_visibility="collapsed")
+                with col2:
+                    st.markdown(f"""
+                        <div class="source-card">
+                            <div class="source-title">{source['title']}</div>
+                            <div class="source-url">{source['url']}</div>
+                            <div class="source-preview">{source['content'][:130]}...</div>
+                        </div>
+                    """, unsafe_allow_html=True)
+                if checked:
+                    selected.append(i)
 
         st.markdown(f'<div class="selection-counter">▸ {len(selected)} source{"s" if len(selected) != 1 else ""} selected</div>', unsafe_allow_html=True)
 
@@ -533,7 +524,7 @@ with left_col:
             else:
                 with st.spinner("Agents are working... this may take 30-60 seconds."):
                     add_log(f"User selected {len(selected)} sources.", "user")
-                    add_log("Scraping selected pages...", "researcher")
+                    add_log("Scraping pages per subject...", "researcher")
 
                     st.session_state.pipeline_state["selected_indices"] = selected
                     st.session_state.pipeline_state["awaiting_source_selection"] = False
@@ -543,8 +534,8 @@ with left_col:
                     from agents.writer import writer_agent
 
                     state = researcher_agent_after_selection(st.session_state.pipeline_state)
-                    add_log(f"Pages scraped separately for {subject_a} and {subject_b}.", "researcher")
-                    add_log("Passing independent datasets to Analyst Agent...", "system")
+                    add_log(f"Independent data collected for {len(subjects)} subjects.", "researcher")
+                    add_log("Passing to Analyst Agent...", "system")
 
                     state = analyst_agent(state)
                     add_log("Independent comparison analysis complete.", "analyst")
