@@ -9,10 +9,16 @@ from typing import TypedDict, Any
 # Every agent reads from and writes to this same object
 class ResearchState(TypedDict):
     query: str
+    subject_a: str
+    subject_b: str
+    search_results_a: list
+    search_results_b: list
     search_results: list
     past_research: list
     selected_indices: list
     selected_sources: list
+    raw_research_a: str
+    raw_research_b: str
     raw_research: str
     analysis: str
     pdf_path: str
@@ -90,10 +96,16 @@ def build_pipeline():
 def get_initial_state(query: str) -> dict:
     return {
         "query": query,
+        "subject_a": "",
+        "subject_b": "",
+        "search_results_a": [],
+        "search_results_b": [],
         "search_results": [],
         "past_research": [],
         "selected_indices": [],
         "selected_sources": [],
+        "raw_research_a": "",
+        "raw_research_b": "",
         "raw_research": "",
         "analysis": "",
         "pdf_path": "",
